@@ -1,4 +1,4 @@
-use crate::appearance::Appearance;
+use crate::{appearance::Appearance, localization};
 use crate::ui_components::icons::Icon;
 use pathfinder_geometry::vector::vec2f;
 use warpui::{
@@ -79,7 +79,7 @@ impl SettingsUmbrella {
             .button(ButtonVariant::Text, self.button_state_handle.clone())
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::TextFirst,
-                self.label.to_string(),
+                localization::localize(self.label).into_owned(),
                 chevron_icon.to_warpui_icon(text_color),
                 MainAxisSize::Max,
                 MainAxisAlignment::SpaceBetween,
@@ -105,7 +105,8 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.to_string() + &match_data.to_string();
+        let mut label = localization::localize(&section.to_string()).into_owned();
+        label.push_str(&match_data.to_string());
 
         let hoverable = appearance
             .ui_builder()

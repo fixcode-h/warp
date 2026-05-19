@@ -26,6 +26,7 @@ use super::{
 };
 use crate::{
     appearance::Appearance,
+    localization,
     settings::CloudPreferencesSettings,
     themes::theme::Fill,
     ui_components::icons::Icon,
@@ -185,7 +186,11 @@ impl SettingsPage {
                 },
                 self.button_state_handle.clone(),
             )
-            .with_text_label(self.section.to_string() + &match_data.to_string())
+            .with_text_label({
+                let mut label = localization::localize(&self.section.to_string()).into_owned();
+                label.push_str(&match_data.to_string());
+                label
+            })
             .with_style(
                 UiComponentStyles::default()
                     .set_border_width(0.)
@@ -668,6 +673,7 @@ pub fn render_body_item_label_internal<T: Clone + Action>(
     toggle_state: ToggleState,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let label_text = localization::localize(&label_text).into_owned();
     let mut label = Flex::row();
     let label_color = match label_color_override {
         Some(color) => color,
@@ -763,7 +769,11 @@ pub fn render_body_item_label_internal<T: Clone + Action>(
 pub fn render_page_title(text: &str, size: f32, appearance: &Appearance) -> Box<dyn Element> {
     Container::new(
         Align::new(
-            Text::new_inline(text.to_string(), appearance.ui_font_family(), size)
+            Text::new_inline(
+                localization::localize(text).into_owned(),
+                appearance.ui_font_family(),
+                size,
+            )
                 .with_style(Properties::default().weight(Weight::Bold))
                 .with_color(appearance.theme().active_ui_text_color().into())
                 .finish(),
@@ -866,6 +876,7 @@ pub fn render_dropdown_item_label(
     color_override: Option<Fill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let label_text = localization::localize(&label_text).into_owned();
     let label = Text::new(label_text, appearance.ui_font_family(), CONTENT_FONT_SIZE)
         .with_color(
             color_override
@@ -1925,5 +1936,5 @@ pub(super) fn build_reset_button(
             font_size: Some(appearance.ui_font_size() * 0.8),
             ..Default::default()
         })
-        .with_text_label("Reset to default".to_owned())
+        .with_text_label(localization::localize("Reset to default").into_owned())
 }
