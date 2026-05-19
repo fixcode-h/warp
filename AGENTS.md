@@ -25,6 +25,16 @@ Add regression tests for bug fixes and unit tests for non-trivial logic. Place R
 
 Recent commits use concise, imperative summaries, often with PR numbers, for example `Fix skill link in agent details panel (#11231)`. Prefix branches with your handle, such as `alice/fix-parser`. PRs should target issues labeled `ready-to-spec` or `ready-to-implement`, use `.github/pull_request_template.md`, describe testing, include UI screenshots, and add `CHANGELOG-NEW-FEATURE`, `CHANGELOG-IMPROVEMENT`, `CHANGELOG-BUG-FIX`, or `CHANGELOG-NONE` when appropriate.
 
+## Branch & Release Flow
+
+- `main` is the primary release branch. Release workflows build packages from this branch.
+- `master` is reserved for synchronizing upstream code from `https://github.com/warpdotdev/warp`'s `master` branch.
+- `dev` is the development branch for local feature work and repository-specific changes.
+- Develop new changes on `dev` or short-lived branches based on `dev`.
+- When updating from upstream, sync upstream `master` into the local `master` branch first, then merge local `master` into `dev`.
+- After `dev` has integrated upstream and local development changes are ready for release, merge `dev` into `main`.
+- Do not merge upstream `master` directly into `main`; route upstream updates through `master` and `dev` first.
+
 ## Agent-Specific Instructions
 
-Read `WARP.md` before modifying code; it contains architecture notes, UI rules, terminal model locking cautions, and feature flag guidance. This fork tracks fast-moving upstream, so keep customizations isolated and upstream-friendly. Prefer plugin-like extension points, config, adapters, or small wrappers over broad core edits. Ask before large, invasive, or hard-to-rebase changes. Prefer `.agents/skills/` workflows for feature flags, telemetry, UI, Rust tests, and integration tests. When relaying command results or console output to users, use Chinese whenever practical; preserve exact commands, paths, and errors when needed, with Chinese explanation.
+Read `WARP.md` before modifying code; it contains architecture notes, UI rules, terminal model locking cautions, and feature flag guidance. This fork tracks fast-moving upstream, so keep customizations isolated and upstream-friendly. Prefer plugin-like extension points, config, adapters, or small wrappers over broad core edits. Ask before large, invasive, or hard-to-rebase changes. Keep branch operations aligned with the branch flow above, especially when syncing upstream changes or preparing release-bound changes. Prefer `.agents/skills/` workflows for feature flags, telemetry, UI, Rust tests, and integration tests. When relaying command results or console output to users, use Chinese whenever practical; preserve exact commands, paths, and errors when needed, with Chinese explanation.
