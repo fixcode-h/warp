@@ -84,7 +84,10 @@ jobs:
       release_branch: ${{ steps.create_branch_and_tag.outputs.branch }}
       release_tag: ${{ steps.create_branch_and_tag.outputs.tag }}
       release_body: ${{ steps.generate_release_body.outputs.body }}
+      should_generate_changelogs: ${{ steps.set_publish.outputs.should_generate_changelogs }}
+      should_upload_gcs: ${{ steps.set_publish.outputs.should_upload_gcs }}
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
+      should_publish_sentry: ${{ steps.set_publish.outputs.should_publish_sentry }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -106,9 +109,29 @@ jobs:
           # Pushes to main are release-bound and publish automatically.
           # Direct workflow_dispatch runs remain unpublished test builds.
           if [[ "${{ github.event_name }}" == "push" || "${{ inputs.should_publish }}" == "true" ]]; then
+            should_publish=true
             echo "should_publish=true" >> $GITHUB_OUTPUT
           else
+            should_publish=false
             echo "should_publish=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "$should_publish" == "true" && "${{ secrets.GOOGLE_APPLICATION_CREDENTIALS != '' }}" == "true" ]]; then
+            echo "should_upload_gcs=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_upload_gcs=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "$should_publish" == "true" && "${{ secrets.SENTRY_RELEASE_TOKEN != '' }}" == "true" ]]; then
+            echo "should_publish_sentry=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish_sentry=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "$should_publish" == "true" && "${{ secrets.WARP_API_KEY != '' }}" == "true" ]]; then
+            echo "should_generate_changelogs=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_generate_changelogs=false" >> $GITHUB_OUTPUT
           fi
         shell: bash
 
@@ -184,7 +207,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create Sentry release
-        if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
+        if: ${{ steps.set_publish.outputs.should_publish_sentry == 'true' }}
         uses: getsentry/action-release@5657c9e888b4e2cc85f4d29143ea4131fde4a73a # v3.6.0
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -265,12 +288,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload DMG to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -286,7 +309,7 @@ jobs:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -294,7 +317,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debug symbols from frameworks to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -391,7 +414,7 @@ jobs:
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -399,7 +422,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -440,12 +463,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload DMG to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -531,12 +554,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload CLI to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -552,7 +575,7 @@ jobs:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -560,7 +583,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -610,6 +633,7 @@ jobs:
           channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
@@ -679,7 +703,7 @@ jobs:
           PKGDIR: ${{ steps.bundle_app.outputs.packages_dir }}
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -687,7 +711,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -704,7 +728,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload packages to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -764,6 +788,7 @@ jobs:
           channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
@@ -835,7 +860,7 @@ jobs:
           PKGDIR: ${{ steps.bundle_cli.outputs.packages_dir }}
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -843,7 +868,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -860,7 +885,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload CLI packages to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
@@ -883,7 +908,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload CLI tar.gz to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
@@ -954,6 +979,7 @@ jobs:
           channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
@@ -1032,6 +1058,7 @@ jobs:
           channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
@@ -1098,11 +1125,12 @@ jobs:
           channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
       
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -1204,7 +1232,7 @@ jobs:
           arch: aarch64
           
       - name: Upload app debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         # Important: we have to do this before the binary is overwritten by the CLI version, which has the same filename
         run: |
           script/sentry_upload_dif.sh
@@ -1248,7 +1276,7 @@ jobs:
           artifact: cli
 
       - name: Upload CLI debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         env:
@@ -1292,7 +1320,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload app packages to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1306,7 +1334,7 @@ jobs:
 
       - name: Upload CLI packages to Google Cloud Storage
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           parent: false
@@ -1318,7 +1346,7 @@ jobs:
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
       - name: Upload CLI tar.gz to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
@@ -1378,7 +1406,7 @@ jobs:
         shell: bash
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -1386,7 +1414,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -1403,12 +1431,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload packages to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1425,7 +1453,7 @@ jobs:
             content-encoding: br
 
       - name: Upload assets to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.assets_dir }}
@@ -1556,7 +1584,7 @@ jobs:
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
 
       - name: Set up Sentry CLI
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
@@ -1564,7 +1592,7 @@ jobs:
           project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload binary to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -1572,7 +1600,7 @@ jobs:
           DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.build_binary.outputs.binary_path }}
 
       - name: Upload debugging symbols to Sentry
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_publish_sentry == 'true' }}
         run: |
           script/sentry_upload_dif.sh
         shell: bash
@@ -1589,12 +1617,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload installer to Google Cloud Storage
-        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
@@ -1675,7 +1703,7 @@ jobs:
 
   generate_changelogs:
     name: Generate Changelogs
-    if: ${{ needs.prepare_release.outputs.should_publish == 'true' && needs.prepare_release.outputs.channel == 'stable' }}
+    if: ${{ needs.prepare_release.outputs.should_generate_changelogs == 'true' && needs.prepare_release.outputs.channel == 'stable' }}
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -1840,10 +1868,12 @@ jobs:
         shell: bash
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload changelog.json to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_upload_gcs == 'true' }}
         uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
         with:
           path: changelog.json
