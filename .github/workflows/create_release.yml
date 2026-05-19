@@ -70,6 +70,9 @@ env:
   CARGO_TERM_COLOR: always
   CONFIG_FILE: ".github/workflows/release_configurations.json"
 
+permissions:
+  contents: write
+
 jobs:
   # Perform all once-per-release steps.  Dependent jobs will build release
   # assets and upload them as appropriate.
@@ -87,6 +90,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          token: ${{ secrets.CREATE_RELEASE_TAG_PUSH_PAT || github.token }}
 
       - name: Get channel configuration
         id: get-config
@@ -124,9 +128,7 @@ jobs:
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
-          # See https://github.com/orgs/community/discussions/151442 for why we need to use
-          # a PAT here.
-          GITHUB_TOKEN: ${{ secrets.CREATE_RELEASE_TAG_PUSH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.CREATE_RELEASE_TAG_PUSH_PAT || github.token }}
 
       - name: Generate release body
         id: generate_release_body
