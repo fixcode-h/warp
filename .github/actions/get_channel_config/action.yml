@@ -51,9 +51,13 @@ runs:
         CHANNEL: ${{ inputs.channel }}
       run: |
         echo ::echo::on
-        jq -e '.channels[] | select(.channel == $ENV.CHANNEL)' $CONFIG_FILE > /dev/null
-        # Fail if the given channel is not found in the JSON release configuration.
-        [ $? -eq 0 ] || (echo ::error::"Channel $CHANNEL not found in release configuration" && exit 1)
+        # Fail with a clear error if the given channel is not found in the JSON
+        # release configuration.
+        if ! jq -e '.channels[] | select(.channel == $ENV.CHANNEL)' $CONFIG_FILE > /dev/null; then
+          channels="$(jq -r '[.channels[].channel] | join(", ")' "$CONFIG_FILE")"
+          echo ::error::"Channel $CHANNEL not found in release configuration. Use one of: $channels"
+          exit 1
+        fi
         jq -rc '.channels[] | select(.channel == $ENV.CHANNEL) | to_entries | map("\(.key)=\(.value)")[]' $CONFIG_FILE >> $GITHUB_OUTPUT
         echo ::echo::off
       shell: bash

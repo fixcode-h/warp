@@ -1,6 +1,6 @@
 # A reusable workflow that encapsulates all of the logic surrounding building
 # all bundles for a single release channel, either new releases (when run on the
-# `master` branch) or updated release candidates (when run within a `*_release`
+# `main` branch) or updated release candidates (when run within a `*_release`
 # branch).
 #
 # This can either be triggered:
@@ -9,6 +9,9 @@
 
 name: Create Release
 on:
+  push:
+    branches:
+      - main
   workflow_call:
     inputs:
       channel:
@@ -38,8 +41,14 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        type: string
+        description: The channel to create a test release artifact for.
+        type: choice
         required: true
+        default: stable
+        options:
+          - dev
+          - preview
+          - stable
       build_linux:
         description: Build Linux artifacts.
         type: boolean
@@ -68,27 +77,31 @@ jobs:
     name: Prepare release
     runs-on: ubuntu-latest
     outputs:
+      channel: ${{ steps.get-config.outputs.channel }}
       release_branch: ${{ steps.create_branch_and_tag.outputs.branch }}
       release_tag: ${{ steps.create_branch_and_tag.outputs.tag }}
+      release_body: ${{ steps.generate_release_body.outputs.body }}
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Get channel configuration
         id: get-config
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ github.event.inputs.channel || inputs.channel || 'stable' }}
 
       - name: Set publish flag based on the workflow trigger
         id: set_publish
         run: |
           # The should_publish input is only set on the workflow_call trigger.
-          # This means it's not possible to trigger publishing via workflow_dispatch, and
-          # publishing is enabled by default when called for a new release or RC.
-          if [[ "${{ inputs.should_publish }}" == "true" ]]; then
+          # Pushes to main are release-bound and publish automatically.
+          # Direct workflow_dispatch runs remain unpublished test builds.
+          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.should_publish }}" == "true" ]]; then
             echo "should_publish=true" >> $GITHUB_OUTPUT
           else
             echo "should_publish=false" >> $GITHUB_OUTPUT
@@ -115,6 +128,47 @@ jobs:
           # a PAT here.
           GITHUB_TOKEN: ${{ secrets.CREATE_RELEASE_TAG_PUSH_PAT }}
 
+      - name: Generate release body
+        id: generate_release_body
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          RELEASE_BODY_TEXT: ${{ steps.get-config.outputs.release_body_text }}
+          RELEASE_TAG: ${{ steps.create_branch_and_tag.outputs.tag }}
+        run: |
+          git fetch --tags --force
+
+          current_tag="$RELEASE_TAG"
+          previous_tag="$(git tag --list "v0.*.${CHANNEL}_*" --sort=-v:refname | grep -v -F "$current_tag" | head -n 1 || true)"
+
+          if [[ -n "$previous_tag" ]]; then
+            range="$previous_tag..$current_tag"
+            changes="$(git log "$range" --pretty=format:'- %s (%h)' || true)"
+          else
+            range="$current_tag"
+            changes="$(git log "$current_tag" --pretty=format:'- %s (%h)' || true)"
+          fi
+
+          if [[ -z "$changes" ]]; then
+            changes="- No commits found for $range"
+          fi
+
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            echo "$RELEASE_BODY_TEXT"
+            echo
+            echo "Changes"
+            echo "-------"
+            if [[ -n "$previous_tag" ]]; then
+              echo "Range: $previous_tag..$current_tag"
+            else
+              echo "Range: initial $current_tag"
+            fi
+            echo
+            echo "$changes"
+            echo "RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
@@ -122,7 +176,7 @@ jobs:
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
-          body: ${{ steps.get-config.outputs.release_body_text }}
+          body: ${{ steps.generate_release_body.outputs.body }}
           draft: false
           prerelease: ${{ steps.get-config.outputs.is_prerelease }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -142,7 +196,7 @@ jobs:
     name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    if: ${{ inputs.build_macos != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -178,7 +232,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Install cargo-bundle
         run: script/install_cargo_bundle
@@ -270,7 +324,7 @@ jobs:
     name: Build Release (macOS Universal)
     runs-on: macos-26-xlarge
     needs: [prepare_release, release_macos_single_arch]
-    if: ${{ inputs.build_macos != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_macos != false }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -294,7 +348,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Download aarch64 build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -411,7 +465,7 @@ jobs:
     name: Build Release (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    if: ${{ inputs.build_macos != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -445,7 +499,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Build ${{ matrix.arch }} binary
         id: bundle_cli
@@ -515,7 +569,7 @@ jobs:
     name: Build Release (Linux x86_64)
     runs-on: namespace-profile-ubuntu-20-04
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux != false }}
     timeout-minutes: 90
     env:
       # Automatically extract AppImages before running them instead of mounting
@@ -551,7 +605,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -673,7 +727,7 @@ jobs:
     name: Build Release (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-20-04
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux != false }}
     timeout-minutes: 90
     env:
       # Cache the generated settings schema so prepare_bundled_resources only
@@ -705,7 +759,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -848,7 +902,7 @@ jobs:
     name: Build Release (Linux ARM)
     runs-on: namespace-profile-ubuntu-20-04-arm
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux != false }}
     timeout-minutes: 90
     env:
       # Automatically extract AppImages before running them instead of mounting
@@ -895,7 +949,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -945,7 +999,7 @@ jobs:
     name: Build Release (Linux CLI ARM)
     runs-on: namespace-profile-ubuntu-20-04-arm
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -973,7 +1027,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -1022,7 +1076,7 @@ jobs:
     name: Bundle Release (Linux ARM)
     runs-on: namespace-profile-ubuntu-20-04
     needs: [ prepare_release, build_linux_arm_binaries, build_linux_cli_arm_binaries ]
-    if: ${{ inputs.build_linux != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_linux != false }}
     timeout-minutes: 60
     env:
       # Cache the generated settings schema so prepare_bundled_resources only
@@ -1039,7 +1093,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -1283,7 +1337,7 @@ jobs:
     name: Build Release (Web)
     runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
-    if: ${{ inputs.build_web != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_web != false }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -1300,7 +1354,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Bundle app
         id: bundle_app
@@ -1397,7 +1451,7 @@ jobs:
     name: Build Release (Windows ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    if: ${{ inputs.build_windows != false }}
+    if: ${{ github.event_name == 'push' || inputs.build_windows != false }}
     timeout-minutes: 150
     strategy:
       matrix:
@@ -1432,7 +1486,7 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Build binary
         id: build_binary
@@ -1473,7 +1527,7 @@ jobs:
         run: |
           $Dlib = (Get-ChildItem -Recurse "$env:LOCALAPPDATA" -Filter "Azure.CodeSigning.Dlib.dll" -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-          if (-not $Dlib) { throw "Azure.CodeSigning.Dlib.dll not found — did the earlier signing action run?" }
+          if (-not $Dlib) { throw "Azure.CodeSigning.Dlib.dll not found - did the earlier signing action run?" }
           Write-Output "Dlib: $Dlib"
           $SignTool = (Get-ChildItem -Recurse "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" |
             Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1).FullName
@@ -1594,7 +1648,7 @@ jobs:
           if [[ ${{ needs.release_linux_cli_x86.result }} != 'success' ]]; then
               FAILED+=("Linux CLI x86_64")
           fi
-          if [[ ${{ needs.release_web.result }} != 'success' && ${{ inputs.channel }} != 'preview' ]]; then
+          if [[ ${{ needs.release_web.result }} != 'success' && ${{ needs.prepare_release.outputs.channel }} != 'preview' ]]; then
               FAILED+=("WASM")
           fi
           if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
@@ -1613,13 +1667,13 @@ jobs:
           channel-id: "#oncall-client"
           # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
           # S06N82RS7FA is the user group ID for @oncall-client-eng.
-          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
+          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ needs.prepare_release.outputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
         env:
           SLACK_BOT_TOKEN: ${{ secrets.ACTION_MONITORING_SLACK }}
 
   generate_changelogs:
     name: Generate Changelogs
-    if: ${{ needs.prepare_release.outputs.should_publish == 'true' && inputs.channel == 'stable' }}
+    if: ${{ needs.prepare_release.outputs.should_publish == 'true' && needs.prepare_release.outputs.channel == 'stable' }}
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -1644,13 +1698,13 @@ jobs:
         uses: ./.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
-          channel: ${{ inputs.channel }}
+          channel: ${{ needs.prepare_release.outputs.channel }}
 
       - name: Generate changelog via Oz
         uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
         with:
           prompt: |
-            Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
+            Generate a changelog draft for the ${{ needs.prepare_release.outputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
 
             Output directory: ${{ runner.temp }}/changelog-draft
 
@@ -1659,7 +1713,7 @@ jobs:
 
             After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
 
-            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
+            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint - do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
           warp_api_key: ${{ secrets.WARP_API_KEY }}
           share: team
 
