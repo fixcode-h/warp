@@ -22,6 +22,20 @@ lazy_static! {
     static ref INSTALLER_PATH: Arc<Mutex<Option<TempPath>>> = Default::default();
 }
 
+fn update_download_url(version: &str, installer_file_name: &str) -> String {
+    if version.ends_with(".stable_00") {
+        format!(
+            "https://github.com/fixcode-h/warp/releases/download/{version}/{installer_file_name}"
+        )
+    } else {
+        format!(
+            "{}/{}",
+            release_assets_directory_url(ChannelState::channel(), version),
+            installer_file_name
+        )
+    }
+}
+
 /// Download the Inno Setup install wizard, the same one users run on the first Warp install, and
 /// place it into the "data dir".
 pub(super) async fn download_update_and_cleanup(
@@ -32,11 +46,7 @@ pub(super) async fn download_update_and_cleanup(
     const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
     let installer_file_name = installer_file_name()?;
-    let url = format!(
-        "{}/{}",
-        release_assets_directory_url(ChannelState::channel(), &version_info.version),
-        installer_file_name
-    );
+    let url = update_download_url(&version_info.version, &installer_file_name);
 
     // Create a temporary file that we'll write the download into.
     let mut already_exists = false;

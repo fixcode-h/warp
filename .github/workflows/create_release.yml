@@ -85,6 +85,8 @@ jobs:
       release_tag: ${{ steps.create_branch_and_tag.outputs.tag }}
       release_body: ${{ steps.generate_release_body.outputs.body }}
       should_generate_changelogs: ${{ steps.set_publish.outputs.should_generate_changelogs }}
+      should_send_slack_alerts: ${{ steps.set_publish.outputs.should_send_slack_alerts }}
+      should_sign_windows: ${{ steps.set_publish.outputs.should_sign_windows }}
       should_upload_gcs: ${{ steps.set_publish.outputs.should_upload_gcs }}
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
       should_publish_sentry: ${{ steps.set_publish.outputs.should_publish_sentry }}
@@ -132,6 +134,18 @@ jobs:
             echo "should_generate_changelogs=true" >> $GITHUB_OUTPUT
           else
             echo "should_generate_changelogs=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "$should_publish" == "true" && "${{ secrets.ACTION_MONITORING_SLACK != '' }}" == "true" ]]; then
+            echo "should_send_slack_alerts=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_send_slack_alerts=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' }}" == "true" ]]; then
+            echo "should_sign_windows=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_sign_windows=false" >> $GITHUB_OUTPUT
           fi
         shell: bash
 
@@ -1527,6 +1541,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign the executables with Azure Trusted Signing
+        if: ${{ needs.prepare_release.outputs.should_sign_windows == 'true' }}
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -1553,6 +1568,7 @@ jobs:
       # https://github.com/warpdotdev/Warp/issues/8794
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
+        if: ${{ needs.prepare_release.outputs.should_sign_windows == 'true' }}
         shell: pwsh
         run: |
           $Dlib = (Get-ChildItem -Recurse "$env:LOCALAPPDATA" -Filter "Azure.CodeSigning.Dlib.dll" -ErrorAction SilentlyContinue |
@@ -1614,6 +1630,27 @@ jobs:
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.installer_path }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate channel_versions.json for GitHub release
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' && matrix.arch == 'x64' }}
+        shell: bash
+        run: |
+          jq -n \
+            --arg version "${{ needs.prepare_release.outputs.release_tag }}" \
+            '{
+              dev: { version: $version },
+              preview: { version: $version },
+              stable: { version: $version }
+            }' > channel_versions.json
+          cat channel_versions.json
+
+      - name: Add channel_versions.json to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' && matrix.arch == 'x64' }}
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: channel_versions.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -1692,7 +1729,7 @@ jobs:
 
       - name: Send Slack notification if unsuccessful
         uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
-        if: ${{ steps.failed_releases.outputs.failed != '' }}
+        if: ${{ steps.failed_releases.outputs.failed != '' && needs.prepare_release.outputs.should_send_slack_alerts == 'true' }}
         with:
           channel-id: "#oncall-client"
           # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.

@@ -9,6 +9,9 @@ use crate::{
     server::server_api::{ServerApi, FETCH_CHANNEL_VERSIONS_TIMEOUT},
 };
 
+const FIXCODE_H_WARP_LATEST_RELEASE_CHANNEL_VERSIONS_URL: &str =
+    "https://github.com/fixcode-h/warp/releases/latest/download/channel_versions.json";
+
 // Fetches channel versions asynchronously from the Warp server. If the Warp server request fails,
 // then fetches from GCP JSON storage as a fallback.
 pub async fn fetch_channel_versions(
@@ -24,6 +27,18 @@ pub async fn fetch_channel_versions(
         let channel_versions_string = read_to_string::<&str>(&path)?;
         return serde_json::from_str(channel_versions_string.as_str())
             .context("Failed to parse channel versions JSON");
+    }
+
+    if cfg!(windows) {
+        match fetch_channel_versions_from_fixcode_release(server_api.http_client()).await {
+            Ok(versions) => return Ok(versions),
+            Err(err) => {
+                log::warn!(
+                    "Failed to retrieve channel versions from fixcode-h/warp GitHub release: \
+                    {err:#}. Falling back to Warp server."
+                );
+            }
+        }
     }
 
     let channel_versions = server_api
@@ -43,7 +58,17 @@ pub async fn fetch_channel_versions(
                 back to GCP JSON storage."
                 ),
             }
-            fetch_channel_versions_from_json_storage(server_api.http_client(), nonce).await
+            match fetch_channel_versions_from_json_storage(server_api.http_client(), nonce).await {
+                Ok(versions) => Ok(versions),
+                Err(err) if cfg!(windows) => {
+                    log::warn!(
+                        "Failed to retrieve channel versions from GCP JSON storage: {err:#}. \
+                        Falling back to fixcode-h/warp GitHub releases."
+                    );
+                    fetch_channel_versions_from_fixcode_release(server_api.http_client()).await
+                }
+                Err(err) => Err(err),
+            }
         }
     }
 }
@@ -71,5 +96,19 @@ async fn fetch_channel_versions_from_json_storage(
         .await?;
     let versions: ChannelVersions = res.json().await?;
     log::info!("Received channel versions from GCP JSON storage: {versions}");
+    Ok(versions)
+}
+
+pub(super) async fn fetch_channel_versions_from_fixcode_release(
+    client: &http_client::Client,
+) -> Result<ChannelVersions> {
+    log::info!("Fetching channel versions from fixcode-h/warp GitHub release");
+    let res = client
+        .get(FIXCODE_H_WARP_LATEST_RELEASE_CHANNEL_VERSIONS_URL)
+        .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
+        .send()
+        .await?;
+    let versions: ChannelVersions = res.json().await?;
+    log::info!("Received channel versions from fixcode-h/warp GitHub release: {versions}");
     Ok(versions)
 }
